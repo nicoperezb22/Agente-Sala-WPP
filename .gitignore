@@ -1,0 +1,11 @@
+# Editor / entorno local
+.vscode/
+.claude/Untitled-1.json
+.claude/settings.local.json
+
+# Dependencias
+node_modules/
+
+# Secretos (los tokens van en Script Properties, nunca en el repo)
+.env
+*.local
