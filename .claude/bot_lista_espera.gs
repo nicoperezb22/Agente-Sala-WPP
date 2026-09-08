@@ -33,6 +33,10 @@ const FIELD_LABELS = {
   motivo: 'motivo de la espera'
 };
 
+// Formato IATA típico: código de aerolínea (2-3 letras/números) + número de vuelo (1-4 dígitos,
+// opcionalmente con una letra de sufijo). Ej.: AA1234, LA800, IB6844A. No valida que el vuelo exista.
+const VUELO_REGEX = /^[A-Za-z0-9]{2,3}[\s-]?\d{1,4}[A-Za-z]?$/;
+
 const MSG_INSTRUCCIONES = 'Hola, bienvenido a la lista de espera. Respondé en un solo mensaje con estos datos separados por coma, en este orden: nombre completo, número de vuelo, cantidad de personas, motivo.\n\nEjemplo: Juan Pérez, AA1234, 3, sala llena';
 const MSG_YA_ANOTADO = 'Ya estás anotado. Escribí "estado" cuando quieras saber cuánto te falta.';
 const MSG_CONFIRMACION = 'Listo, quedaste anotado en la lista de espera. Escribí "estado" en cualquier momento para saber tu posición.';
@@ -135,6 +139,11 @@ function handleMessage(phone, text) {
   // Validación liviana: cantidad_personas tiene que ser un número
   if (asignaciones.cantidad_personas && isNaN(parseInt(asignaciones.cantidad_personas, 10))) {
     delete asignaciones.cantidad_personas;
+  }
+
+  // Validación liviana: vuelo tiene que tener forma de código IATA (no valida que exista)
+  if (asignaciones.vuelo && !VUELO_REGEX.test(asignaciones.vuelo.trim())) {
+    delete asignaciones.vuelo;
   }
 
   Object.keys(asignaciones).forEach(campo => {

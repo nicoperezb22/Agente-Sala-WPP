@@ -128,7 +128,7 @@ telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp
 - **El nombre de modelo de Gemini (`gemini-flash-lite-latest`) no está confirmado contra la documentación vigente** — hay que chequearlo en aistudio.google.com antes de producción, estos nombres cambian seguido.
 - **Los límites exactos del free tier de Gemini (RPM/RPD) variaron entre fuentes consultadas** (10-15 RPM, 250-1500 RPD según modelo) — confirmar en el proyecto real de AI Studio.
 - **La asignación de campos es posicional, no semántica.** Si el pasajero manda los datos en un orden distinto al pedido cuando el respaldo por comas entra en juego (Gemini falló), se puede guardar mal. Gemini mitiga esto en el camino feliz, pero el respaldo no.
-- **Sin validar formato de `vuelo`** — cualquier texto se acepta.
+- **Validación de formato de `vuelo` es liviana (regex de forma IATA)** — rechaza texto que claramente no es un código de vuelo, pero no valida que el vuelo exista realmente ni contra una lista de aerolíneas.
 - **Nunca se probó con concurrencia real.** Todo el análisis de carga es cálculo contra cuotas documentadas de Google, no una prueba con tráfico real.
 - **Tema legal pendiente sin resolver:** se está capturando y almacenando información de pasajeros (nombre, vuelo) fuera del sistema oficial de control de acceso. Ley 25.326 (Protección de Datos Personales, Argentina) puede aplicar. No se consultó a un abogado — pendiente antes de escalar esto más allá de una sala.
 - **Multi-sala no está resuelto.** El diseño asume un solo número de WhatsApp / una sola cola. Si Star Alliance y FastPass comparten número, hace falta agregar una columna `sala` y una forma de distinguir origen (ej. texto prellenado distinto por QR).
@@ -145,4 +145,3 @@ telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp
 - Dashboard interno para el staff (métricas: tiempo promedio de espera, pico por franja horaria, no-shows).
 - Página de estado propia para autoconsulta sin pasar por WhatsApp (alternativa/complemento al comando "estado").
 - Decisión sobre si Star Alliance y FastPass comparten número de WhatsApp o tienen uno cada una.
-- Validación de formato de vuelo, si el respaldo por comas demuestra ser un problema real en uso.
