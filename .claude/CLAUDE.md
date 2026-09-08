@@ -135,6 +135,36 @@ telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp
 
 ## Plan de testing (antes de ir a producción en hora pico)
 
+### Checklist de casos de uso (desarrollo)
+
+Orden recomendado: primero sin `GEMINI_API_KEY` configurada (sin ella,
+`parseWithGemini` devuelve `null` siempre y todo cae al parser por comas —
+fase determinística, gratis, sin límite de cuota, valida la lógica del bot
+en sí). Recién después, con la key, para validar específicamente el camino
+de Gemini.
+
+**Fase 1 — sin API key (lógica del bot):**
+
+- Primer contacto → crea fila, manda instrucciones.
+- "estado" antes de estar anotado → no debe devolver posición.
+- Camino feliz por comas en el orden esperado (`Juan Pérez, AA1234, 3, sala llena`).
+- Datos incompletos → repregunta solo lo que falta.
+- `cantidad_personas` no numérico → se descarta y se repregunta.
+- `vuelo` con formato inválido → se descarta por `VUELO_REGEX` y se repregunta.
+- Ya anotado (`estado === 'activo'`) y vuelve a escribir → `MSG_YA_ANOTADO`.
+- "estado" estando `activo`, con 2-3 personas activas simultáneas → posición correcta según `calcularPosicion`.
+- Mensaje no-texto (imagen, audio, sticker) → `IGNORED`, no debe crashear.
+- Mismo `message.id` dos veces seguidas (reintento de Meta) → segunda vez `DUPLICATE`, no duplica fila.
+- Mensaje vacío o solo espacios después del trim.
+
+**Fase 2 — con API key (validar Gemini específicamente, no la lógica de arriba):**
+
+- Confirmar que `gemini-flash-lite-latest` sigue siendo un nombre de modelo válido en aistudio.google.com antes de gastar cuota en otra cosa.
+- Datos en orden libre (`"che soy Juan Pérez y voy en el AA1234, somos 3, sala llena"`) — este es el caso que justifica tener Gemini; el parser por comas no lo resuelve.
+- Mensaje ambiguo/incompleto a propósito → Gemini debe devolver `null` en los campos ausentes, no basura.
+- Sacar la key (o simular HTTP≠200) a mitad de test → confirmar que no rompe, cae a comas.
+- Prueba de ráfaga (ver punto 2 más abajo) → mirar el log buscando 429, señal de que se está pegando en el RPM gratuito.
+
 1. Probar el camino feliz en horario tranquilo (mañana).
 2. Prueba de ráfaga deliberada: juntar 5-10 personas y que manden el primer mensaje todas juntas a una señal, para forzar ejecuciones concurrentes reales — un test secuencial de a una persona nunca genera este escenario.
 3. Primer día en hora pico real: revisar el log de ejecuciones de Apps Script al final del turno, prestar atención a errores 429 de Gemini (señal de que se está usando el respaldo por comas más de lo esperado).
