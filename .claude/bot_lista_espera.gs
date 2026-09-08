@@ -93,10 +93,16 @@ function handleMessage(phone, text) {
     if (String(data[i][0]) === String(phone)) { rowIndex = i; break; }
   }
 
-  // Comando "estado": disponible en cualquier momento si ya está anotado
-  if (text.toLowerCase() === 'estado' && rowIndex > -1 && data[rowIndex][estadoCol] === 'activo') {
-    const posicion = calcularPosicion(sheet, phone);
-    sendWhatsApp(phone, 'Estás en la posición ' + posicion + ' de la lista. Te avisamos apenas te toque.');
+  // Comando "estado": nunca se trata como dato, aunque el pasajero todavía
+  // no haya completado su registro (si no, "estado" se guardaría como nombre).
+  if (text.toLowerCase() === 'estado' && rowIndex > -1) {
+    if (data[rowIndex][estadoCol] === 'activo') {
+      const posicion = calcularPosicion(sheet, phone);
+      sendWhatsApp(phone, 'Estás en la posición ' + posicion + ' de la lista. Te avisamos apenas te toque.');
+    } else {
+      const faltantes = FIELDS.filter((f, i) => !data[rowIndex][i + 1]);
+      sendWhatsApp(phone, 'Todavía no estás anotado. Me falta: ' + faltantes.map(f => FIELD_LABELS[f]).join(', ') + '.');
+    }
     return;
   }
 
