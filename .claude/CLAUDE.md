@@ -132,6 +132,7 @@ telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp
 - **Nunca se probó con concurrencia real.** Todo el análisis de carga es cálculo contra cuotas documentadas de Google, no una prueba con tráfico real.
 - **Tema legal pendiente sin resolver:** se está capturando y almacenando información de pasajeros (nombre, vuelo) fuera del sistema oficial de control de acceso. Ley 25.326 (Protección de Datos Personales, Argentina) puede aplicar. No se consultó a un abogado — pendiente antes de escalar esto más allá de una sala.
 - **Multi-sala no está resuelto.** El diseño asume un solo número de WhatsApp / una sola cola. Si Star Alliance y FastPass comparten número, hace falta agregar una columna `sala` y una forma de distinguir origen (ej. texto prellenado distinto por QR).
+- **Conversión de números argentinos para el envío (`fixArgentinaNumber`) asume código de área de 2 dígitos.** El webhook entrega el número con `9` (ej. `5491123871261`), pero para enviar la Cloud API exige sacarlo y meter `15` después del código de área (ej. `54111523871261`) — confirmado a mano contra el probador de Meta para un número de Buenos Aires (área `11`). La función asume 2 dígitos de área, que cubre `11` pero es incorrecto para provincias con área de 3 o 4 dígitos (haría falta una tabla real de códigos de área para cubrirlas todas). No se probó con ningún número de fuera de área `11`.
 
 ## Plan de testing (antes de ir a producción en hora pico)
 

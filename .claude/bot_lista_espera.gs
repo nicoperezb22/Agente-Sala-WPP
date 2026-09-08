@@ -227,6 +227,27 @@ function calcularPosicion(sheet, phone) {
   return idx === -1 ? '—' : idx + 1;
 }
 
+// El webhook entrega los números argentinos como 549 + área + número (ej.
+// 5491123871261), pero la Cloud API para ENVIAR a ese mismo número exige
+// sacar el 9 y meter un 15 después del código de área (ej. 54111523871261).
+// Confirmado a mano contra el probador de Meta para un número de área 11
+// (Buenos Aires/GBA). Asume código de área de 2 dígitos -- es el caso de
+// "11", que va a ser la mayoría de los pasajeros de una sala en Ezeiza,
+// pero es incorrecto para números de otras provincias con área de 3 o 4
+// dígitos (ahí habría que separar por una tabla real de códigos de área,
+// que no está armada). Solo afecta el envío -- lo que se guarda en el
+// Sheet es siempre el número tal cual lo entrega el webhook.
+function fixArgentinaNumber(phone) {
+  const digits = String(phone);
+  if (digits.length === 13 && digits.startsWith('549')) {
+    const nacional = digits.slice(3); // 10 dígitos: área + número local
+    const area = nacional.slice(0, 2);
+    const local = nacional.slice(2);
+    return '54' + area + '15' + local;
+  }
+  return digits;
+}
+
 function sendWhatsApp(to, bodyText) {
   const props = PropertiesService.getScriptProperties();
   const token = props.getProperty('WHATSAPP_TOKEN');
@@ -235,7 +256,7 @@ function sendWhatsApp(to, bodyText) {
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: to,
+    to: fixArgentinaNumber(to),
     type: 'text',
     text: { body: bodyText }
   };
