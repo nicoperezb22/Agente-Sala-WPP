@@ -9,3 +9,6 @@ node_modules/
 # Secretos (los tokens van en Script Properties, nunca en el repo)
 .env
 *.local
+
+# Notas personales de desarrollo, no versionadas
+IDEAS.md
