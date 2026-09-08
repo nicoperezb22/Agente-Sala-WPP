@@ -251,7 +251,21 @@ function sendWhatsApp(to, bodyText) {
   // muteHttpExceptions evita que un 4xx/5xx tire excepción (y por lo tanto
   // evita que se vea como error en el log de ejecuciones), así que hay que
   // loguear la respuesta a mano para poder diagnosticar envíos fallidos.
-  if (response.getResponseCode() !== 200) {
-    console.error('sendWhatsApp a ' + to + ' devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+  const code = response.getResponseCode();
+  console.error('sendWhatsApp a ' + to + ' devolvió ' + code + ': ' + response.getContentText());
+  logToSheet(to, code, response.getContentText());
+}
+
+// Debug temporal: además de console.error, deja un registro en una hoja
+// "Logs" del mismo spreadsheet. Sirve para diagnosticar sin depender del
+// panel de Ejecuciones de Apps Script (que a veces no abre en el navegador).
+// Sacar esto una vez que el envío esté confirmado funcionando en producción.
+function logToSheet(to, code, body) {
+  const ss = SpreadsheetApp.getActive();
+  let logSheet = ss.getSheetByName('Logs');
+  if (!logSheet) {
+    logSheet = ss.insertSheet('Logs');
+    logSheet.appendRow(['timestamp', 'telefono', 'codigo', 'respuesta']);
   }
+  logSheet.appendRow([new Date(), to, code, body]);
 }
