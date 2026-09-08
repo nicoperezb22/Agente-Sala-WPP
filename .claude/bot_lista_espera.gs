@@ -240,11 +240,18 @@ function sendWhatsApp(to, bodyText) {
     text: { body: bodyText }
   };
 
-  UrlFetchApp.fetch(url, {
+  const response = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + token },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
+
+  // muteHttpExceptions evita que un 4xx/5xx tire excepción (y por lo tanto
+  // evita que se vea como error en el log de ejecuciones), así que hay que
+  // loguear la respuesta a mano para poder diagnosticar envíos fallidos.
+  if (response.getResponseCode() !== 200) {
+    console.error('sendWhatsApp a ' + to + ' devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+  }
 }
