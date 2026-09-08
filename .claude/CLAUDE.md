@@ -75,6 +75,7 @@ anotarlo a mano ni contestar "¿cuánto me falta?" uno por uno.
 | Sin lock global (`LockService`) en `doPost`                                | Lock global serializando todos los mensajes              | Pasajeros distintos escriben en filas distintas — serializar a todos por un lock global crea una cola artificial. Se reemplazó por deduplicación puntual por ID de mensaje (evita procesar dos veces si Meta reintenta el webhook). |
 | Gemini como parser principal, con parser por comas como respaldo           | Solo Gemini / solo comas                                 | Si Gemini falla (cuota agotada, red, JSON inválido) el mensaje no se pierde: cae al parseo posicional por comas. Nunca depende 100% de un servicio externo de pago, de ahí el respaldo.                                             |
 | Un solo mensaje del pasajero con todos los datos, no pregunta-por-pregunta | Flujo paso a paso (una pregunta, una respuesta, repetir) | Menos idas y vueltas. El costo es que el parseo es más difícil (де ahí Gemini + respaldo).                                                                                                                                          |
+| Caducidad de 15 min no saca a la persona de la cola automáticamente        | Sacarla sola (cambiar estado, liberar el lugar)          | Solo se le manda el aviso de que pasó el tiempo. Si no se presentó de verdad, el staff la saca a mano — evita sacar a alguien que sí está pero tardó en volver a la fila física.                                                     |
 
 ## Estado actual del código
 
@@ -99,12 +100,27 @@ Archivo: `bot_lista_espera.gs` (Google Apps Script)
 - `calcularPosicion(sheet, phone)` — posición en la cola según orden de
   llegada entre los que están `activo`.
 - `sendWhatsApp(to, bodyText)` — envía un mensaje de texto vía Graph API de Meta.
+- `onCheckboxEdit(e)` — trigger instalable de "Al editar". Cuando el staff
+  tilda la casilla de `llamado` de una fila, guarda `hora_llamado` y manda
+  `MSG_LLAMADO`. Destildarla no hace nada.
+- `checkTiemposCaducados()` — trigger instalable de tiempo (cada 5-10 min).
+  A quien lleva más de `MINUTOS_CADUCIDAD` (15) desde que se lo llamó y
+  todavía no recibió el aviso, le manda `MSG_CADUCADO` y marca
+  `aviso_caducado_enviado`. La persona sigue contando como `activo` en la
+  cola — caducar el aviso no la saca de la lista, eso lo hace el staff a
+  mano si no se presentó.
+- `setupColumnasLlamado()` — se corre una sola vez a mano desde el editor.
+  Agrega las columnas de llamado si faltan y pone checkbox en `llamado`.
 
 ### Estructura del Sheet (hoja `Lista de espera`)
 
 ```
-telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp
+telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp | llamado | hora_llamado | aviso_caducado_enviado
 ```
+
+Las últimas tres columnas (`llamado`, `hora_llamado`, `aviso_caducado_enviado`)
+las agrega solas `setupColumnasLlamado()` si no existen — no hace falta
+crearlas a mano.
 
 ### Script Properties necesarias
 

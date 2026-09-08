@@ -18,6 +18,13 @@
  *    WHATSAPP_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN
  * 3. Implementar como Web App (Ejecutar como: Yo / Acceso: Cualquier usuario)
  * 4. Pegar la URL de la Web App como webhook en Meta for Developers > WhatsApp > Configuration
+ * 5. Ejecutar una vez `setupColumnasLlamado` desde el editor (agrega las
+ *    columnas de "llamado" con checkbox si todavía no existen).
+ * 6. En Activadores (ícono de reloj), agregar DOS triggers instalables:
+ *    - onCheckboxEdit: evento "Al editar" (From spreadsheet > On edit).
+ *    - checkTiemposCaducados: evento de tiempo, cada 5 o 10 minutos.
+ *    Tienen que ser instalables (no simples) para que funcionen aunque
+ *    tilde la casilla alguien del staff que no autorizó el proyecto.
  */
 
 const SHEET_NAME = 'Lista de espera';
@@ -40,6 +47,15 @@ const VUELO_REGEX = /^[A-Za-z0-9]{2,3}[\s-]?\d{1,4}[A-Za-z]?$/;
 const MSG_INSTRUCCIONES = 'Hola, bienvenido a la lista de espera. Respondé en un solo mensaje con estos datos separados por coma, en este orden: nombre completo, número de vuelo, cantidad de personas, motivo.\n\nEjemplo: Juan Pérez, AA1234, 3, sala llena';
 const MSG_YA_ANOTADO = 'Ya estás anotado. Escribí "estado" cuando quieras saber cuánto te falta.';
 const MSG_CONFIRMACION = 'Listo, quedaste anotado en la lista de espera. Escribí "estado" en cualquier momento para saber tu posición.';
+
+// --- Llamado y caducidad de turno ---
+const COL_LLAMADO = 'llamado';
+const COL_HORA_LLAMADO = 'hora_llamado';
+const COL_AVISO_CADUCADO = 'aviso_caducado_enviado';
+const MINUTOS_CADUCIDAD = 15;
+
+const MSG_LLAMADO = 'Te estamos llamando. Por favor, acercate a la sala ahora. Si no te presentás en los próximos ' + MINUTOS_CADUCIDAD + ' minutos vas a perder tu lugar en la lista.';
+const MSG_CADUCADO = 'Pasaron ' + MINUTOS_CADUCIDAD + ' minutos desde que te llamamos y no te presentaste en la sala. Si todavía querés entrar, avisale a la recepción.';
 
 // --- Punto de entrada: verificación del webhook (Meta la llama una sola vez al configurar) ---
 function doGet(e) {
@@ -289,4 +305,79 @@ function logToSheet(to, code, body) {
     logSheet.appendRow(['timestamp', 'telefono', 'codigo', 'respuesta']);
   }
   logSheet.appendRow([new Date(), to, code, body]);
+}
+
+// Ejecutar una sola vez a mano desde el editor. Agrega las columnas de
+// llamado al final de la hoja si todavía no existen, y les pone checkbox
+// a las primeras 500 filas de la columna "llamado" para que sea tildable
+// con el mouse.
+function setupColumnasLlamado() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const nuevasCols = [COL_LLAMADO, COL_HORA_LLAMADO, COL_AVISO_CADUCADO].filter(c => headers.indexOf(c) === -1);
+
+  if (nuevasCols.length > 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1, 1, nuevasCols.length).setValues([nuevasCols]);
+  }
+
+  const headersActualizados = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const llamadoCol = headersActualizados.indexOf(COL_LLAMADO) + 1;
+  sheet.getRange(2, llamadoCol, 500, 1).insertCheckboxes();
+}
+
+// Trigger instalable de tipo "Al editar" (From spreadsheet > On edit),
+// apuntando a esta función -- tiene que ser instalable, no simple, para
+// que corra con los permisos del dueño del script aunque tilde la casilla
+// alguien del staff que no autorizó el proyecto.
+//
+// Al tildar la casilla de "llamado" de una fila: guarda la hora y manda el
+// mensaje de llamado. Destildarla no hace nada (evita reenvíos accidentales).
+function onCheckboxEdit(e) {
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME || e.range.getRow() === 1) return;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const llamadoCol = headers.indexOf(COL_LLAMADO) + 1;
+  if (llamadoCol === 0 || e.range.getColumn() !== llamadoCol || e.value !== 'TRUE') return;
+
+  const row = e.range.getRow();
+  const telefonoCol = headers.indexOf('telefono') + 1;
+  const horaLlamadoCol = headers.indexOf(COL_HORA_LLAMADO) + 1;
+  const avisoCol = headers.indexOf(COL_AVISO_CADUCADO) + 1;
+
+  sheet.getRange(row, horaLlamadoCol).setValue(new Date());
+  sheet.getRange(row, avisoCol).setValue(false);
+
+  const phone = sheet.getRange(row, telefonoCol).getValue();
+  sendWhatsApp(phone, MSG_LLAMADO);
+}
+
+// Trigger instalable de tiempo (cada 5 o 10 minutos), apuntando a esta
+// función. Revisa a quién se llamó hace más de MINUTOS_CADUCIDAD y todavía
+// no recibió el aviso de caducidad, y se lo manda. La persona sigue
+// contando como activa en la cola -- si no se presentó, el staff la saca
+// a mano.
+function checkTiemposCaducados() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const telefonoCol = headers.indexOf('telefono');
+  const llamadoCol = headers.indexOf(COL_LLAMADO);
+  const horaLlamadoCol = headers.indexOf(COL_HORA_LLAMADO);
+  const avisoCol = headers.indexOf(COL_AVISO_CADUCADO);
+  if (llamadoCol === -1 || horaLlamadoCol === -1 || avisoCol === -1) return;
+
+  const ahora = new Date();
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[llamadoCol] !== true || row[avisoCol] === true || !row[horaLlamadoCol]) continue;
+
+    const minutosPasados = (ahora - new Date(row[horaLlamadoCol])) / 60000;
+    if (minutosPasados >= MINUTOS_CADUCIDAD) {
+      sendWhatsApp(row[telefonoCol], MSG_CADUCADO);
+      sheet.getRange(i + 1, avisoCol + 1).setValue(true);
+    }
+  }
 }
