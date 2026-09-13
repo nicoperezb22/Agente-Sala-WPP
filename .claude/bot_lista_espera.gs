@@ -53,9 +53,13 @@ function doGet(e) {
 // es procesar el mismo mensaje dos veces si Meta reintenta la entrega del webhook.
 function doPost(e) {
   try {
+    Logger.log('RAW: ' + e.postData.contents);
+
     const body = JSON.parse(e.postData.contents);
     const value = body.entry && body.entry[0].changes[0].value;
     const message = value && value.messages && value.messages[0];
+
+    Logger.log('MESSAGE PARSEADO: ' + JSON.stringify(message));
 
     if (!message || message.type !== 'text') {
       return ContentService.createTextOutput('IGNORED');
