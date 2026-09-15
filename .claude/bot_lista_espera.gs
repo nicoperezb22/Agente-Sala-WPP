@@ -18,8 +18,9 @@
  *    WHATSAPP_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN
  * 3. Implementar como Web App (Ejecutar como: Yo / Acceso: Cualquier usuario)
  * 4. Pegar la URL de la Web App como webhook en Meta for Developers > WhatsApp > Configuration
- * 5. Ejecutar una vez `setupColumnasLlamado` desde el editor (agrega las
- *    columnas de "llamado" con checkbox si todavía no existen).
+ * 5. Ejecutar una vez `setupColumnasLlamado` y `setupConfigSheet` desde el
+ *    editor (agrega las columnas de "llamado" y la hoja "Config" con el
+ *    interruptor de lista habilitada/deshabilitada, si todavía no existen).
  * 6. En Activadores (ícono de reloj), agregar DOS triggers instalables:
  *    - onCheckboxEdit: evento "Al editar" (From spreadsheet > On edit).
  *    - checkTiemposCaducados: evento de tiempo, cada 5 o 10 minutos.
@@ -62,6 +63,12 @@ const MSG_LLAMADO = 'Te estamos llamando. Por favor, acercate a la sala ahora. S
 const MSG_CADUCADO = 'Pasaron ' + MINUTOS_CADUCIDAD + ' minutos desde que te llamamos y no te presentaste en la sala. Si todavía querés entrar, avisale a la recepción.';
 
 const MSG_RESERVA = 'Este canal es solo para la lista de espera de la sala. Para consultas sobre reservas, escribinos a contact@amaelounge.com.';
+
+// --- Interruptor de lista habilitada/deshabilitada ---
+const CONFIG_SHEET_NAME = 'Config';
+const COL_LISTA_HABILITADA = 'lista_habilitada';
+
+const MSG_LISTA_DESHABILITADA = 'Por el momento no estamos tomando anotaciones a distancia. La lista de espera se maneja de forma presencial en la sala.';
 
 // --- Punto de entrada: verificación del webhook (Meta la llama una sola vez al configurar) ---
 function doGet(e) {
@@ -125,6 +132,15 @@ function handleMessage(phone, text) {
       const faltantes = FIELDS.filter((f, i) => !data[rowIndex][i + 1]);
       sendWhatsApp(phone, 'Todavía no estás anotado. Me falta: ' + faltantes.map(f => FIELD_LABELS[f]).join(', ') + '.');
     }
+    return;
+  }
+
+  // Lista deshabilitada: bloquea anotarse (nuevo o completando datos), pero
+  // no afecta a quien ya está activo -- sigue pudiendo usar "estado" y
+  // recibir avisos de llamado/caducidad con normalidad.
+  const yaActivo = rowIndex > -1 && data[rowIndex][estadoCol] === 'activo';
+  if (!isListaHabilitada() && !yaActivo) {
+    sendWhatsApp(phone, MSG_LISTA_DESHABILITADA);
     return;
   }
 
@@ -401,6 +417,34 @@ function setupColumnasLlamado() {
   const headersActualizados = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const llamadoCol = headersActualizados.indexOf(COL_LLAMADO) + 1;
   sheet.getRange(2, llamadoCol, 500, 1).insertCheckboxes();
+}
+
+// Ejecutar una sola vez a mano desde el editor. Crea la hoja "Config" con
+// el interruptor de lista habilitada/deshabilitada si todavía no existe,
+// tildado (habilitada) por defecto.
+function setupConfigSheet() {
+  const ss = SpreadsheetApp.getActive();
+  let configSheet = ss.getSheetByName(CONFIG_SHEET_NAME);
+  if (!configSheet) {
+    configSheet = ss.insertSheet(CONFIG_SHEET_NAME);
+    configSheet.getRange(1, 1).setValue(COL_LISTA_HABILITADA);
+    configSheet.getRange(2, 1).insertCheckboxes();
+    configSheet.getRange(2, 1).setValue(true);
+  }
+}
+
+// Lee el interruptor de la hoja "Config". Si la hoja o la celda todavía no
+// existen (setupConfigSheet no se corrió) devuelve true -- falla "abierto"
+// para no bloquear la lista por un paso de setup que falta.
+function isListaHabilitada() {
+  const configSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG_SHEET_NAME);
+  if (!configSheet) return true;
+
+  const headers = configSheet.getRange(1, 1, 1, configSheet.getLastColumn()).getValues()[0];
+  const col = headers.indexOf(COL_LISTA_HABILITADA) + 1;
+  if (col === 0) return true;
+
+  return configSheet.getRange(2, col).getValue() !== false;
 }
 
 // Trigger instalable de tipo "Al editar" (From spreadsheet > On edit),

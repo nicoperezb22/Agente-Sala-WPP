@@ -76,6 +76,7 @@ anotarlo a mano ni contestar "¿cuánto me falta?" uno por uno.
 | Gemini como parser principal, con parser por comas como respaldo           | Solo Gemini / solo comas                                 | Si Gemini falla (cuota agotada, red, JSON inválido) el mensaje no se pierde: cae al parseo posicional por comas. Nunca depende 100% de un servicio externo de pago, de ahí el respaldo.                                             |
 | Un solo mensaje del pasajero con todos los datos, no pregunta-por-pregunta | Flujo paso a paso (una pregunta, una respuesta, repetir) | Menos idas y vueltas. El costo es que el parseo es más difícil (де ahí Gemini + respaldo).                                                                                                                                          |
 | Caducidad de 15 min no saca a la persona de la cola automáticamente        | Sacarla sola (cambiar estado, liberar el lugar)          | Solo se le manda el aviso de que pasó el tiempo. Si no se presentó de verdad, el staff la saca a mano — evita sacar a alguien que sí está pero tardó en volver a la fila física.                                                     |
+| Interruptor de lista habilitada falla "abierto" (sin `Config` → `true`)    | Fallar "cerrado" (sin `Config` → bloqueado)               | Si a alguien se le olvida correr `setupConfigSheet`, el bot sigue funcionando como si no existiera el interruptor, en vez de dejar a todo el mundo sin poder anotarse por un paso de setup faltante.                                |
 
 ## Estado actual del código
 
@@ -121,6 +122,16 @@ Archivo: `bot_lista_espera.gs` (Google Apps Script)
   mano si no se presentó.
 - `setupColumnasLlamado()` — se corre una sola vez a mano desde el editor.
   Agrega las columnas de llamado si faltan y pone checkbox en `llamado`.
+- `isListaHabilitada()` / `setupConfigSheet()` — interruptor global para
+  cortar anotaciones a distancia (ej. fuera de horario, o cuando el staff
+  quiere que solo se anote presencialmente). Lee el checkbox
+  `lista_habilitada` de la hoja `Config`; si la hoja o la celda no existen
+  todavía (no se corrió `setupConfigSheet`), devuelve `true` — falla
+  "abierto" para no bloquear la lista por un paso de setup olvidado.
+  Cuando está deshabilitada, `handleMessage` bloquea anotarse (nuevo o
+  completando datos) con `MSG_LISTA_DESHABILITADA`, pero no afecta a quien
+  ya está `activo`: sigue pudiendo usar "estado" y recibir avisos de
+  llamado/caducidad con normalidad.
 
 ### Estructura del Sheet (hoja `Lista de espera`)
 
@@ -131,6 +142,16 @@ telefono | nombre | vuelo | cantidad_personas | motivo | estado | timestamp | ll
 Las últimas tres columnas (`llamado`, `hora_llamado`, `aviso_caducado_enviado`)
 las agrega solas `setupColumnasLlamado()` si no existen — no hace falta
 crearlas a mano.
+
+### Hoja `Config`
+
+```
+lista_habilitada
+```
+
+Una sola celda con checkbox (fila 2, columna A). La crea `setupConfigSheet()`
+si no existe, tildada (habilitada) por defecto. El staff la destilda para
+cortar anotaciones a distancia — no hace falta tocar código para eso.
 
 ### Script Properties necesarias
 
