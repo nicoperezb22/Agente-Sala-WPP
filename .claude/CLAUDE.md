@@ -97,6 +97,12 @@ Archivo: `bot_lista_espera.gs` (Google Apps Script)
   (`generativelanguage.googleapis.com`) pidiendo un JSON con los campos
   faltantes. Devuelve `null` ante cualquier falla (sin API key configurada,
   HTTP != 200, JSON inválido) para que `handleMessage` use el respaldo.
+- `esIntencionReserva(text)` / `clasificarReservaConGemini(text, apiKey)` —
+  detecta si el mensaje es una consulta de reserva (no de lista de espera).
+  Con `GEMINI_API_KEY` configurada le pide la clasificación a Gemini; sin
+  key, o si Gemini falla, cae a un chequeo determinístico por la palabra
+  "reserva". Se corre en cada mensaje entrante, antes de crear/tocar
+  cualquier fila — si da positivo, responde `MSG_RESERVA` y no sigue.
 - `calcularPosicion(sheet, phone)` — posición en la cola según orden de
   llegada entre los que están `activo`.
 - `sendWhatsApp(to, bodyText)` — envía un mensaje de texto vía Graph API de Meta.
@@ -149,6 +155,7 @@ crearlas a mano.
 - **Tema legal pendiente sin resolver:** se está capturando y almacenando información de pasajeros (nombre, vuelo) fuera del sistema oficial de control de acceso. Ley 25.326 (Protección de Datos Personales, Argentina) puede aplicar. No se consultó a un abogado — pendiente antes de escalar esto más allá de una sala.
 - **Multi-sala no está resuelto.** El diseño asume un solo número de WhatsApp / una sola cola. Si Star Alliance y FastPass comparten número, hace falta agregar una columna `sala` y una forma de distinguir origen (ej. texto prellenado distinto por QR).
 - **Conversión de números argentinos para el envío (`fixArgentinaNumber`) asume código de área de 2 dígitos.** El webhook entrega el número con `9` (ej. `5491123871261`), pero para enviar la Cloud API exige sacarlo y meter `15` después del código de área (ej. `54111523871261`) — confirmado a mano contra el probador de Meta para un número de Buenos Aires (área `11`). La función asume 2 dígitos de área, que cubre `11` pero es incorrecto para provincias con área de 3 o 4 dígitos (haría falta una tabla real de códigos de área para cubrirlas todas). No se probó con ningún número de fuera de área `11`.
+- **`esIntencionReserva` duplica el consumo de cuota de Gemini con `GEMINI_API_KEY` configurada.** Se llama en CADA mensaje entrante, antes que `parseWithGemini` — un mensaje normal de registro ahora dispara 2 llamadas a Gemini en vez de 1 (una para clasificar si es reserva, otra para extraer los campos). Esto acerca más rápido al límite de RPM del free tier del que ya se documentó arriba. No se probó el impacto real en la prueba de ráfaga.
 
 ## Plan de testing (antes de ir a producción en hora pico)
 

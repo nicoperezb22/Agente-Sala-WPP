@@ -44,6 +44,10 @@ const FIELD_LABELS = {
 // opcionalmente con una letra de sufijo). Ej.: AA1234, LA800, IB6844A. No valida que el vuelo exista.
 const VUELO_REGEX = /^[A-Za-z0-9]{2,3}[\s-]?\d{1,4}[A-Za-z]?$/;
 
+// Verificá el nombre de modelo vigente en aistudio.google.com -- cambia seguido.
+// Usar el modelo "Flash-Lite" del momento: es el que tiene mayor RPM gratuito.
+const GEMINI_MODEL = 'gemini-flash-lite-latest';
+
 const MSG_INSTRUCCIONES = 'Hola, bienvenido a la lista de espera. Respondé en un solo mensaje con estos datos separados por coma, en este orden: nombre completo, número de vuelo, cantidad de personas, motivo.\n\nEjemplo: Juan Pérez, AA1234, 3, sala llena';
 const MSG_YA_ANOTADO = 'Ya estás anotado. Escribí "estado" cuando quieras saber cuánto te falta.';
 const MSG_CONFIRMACION = 'Listo, quedaste anotado en la lista de espera. Escribí "estado" en cualquier momento para saber tu posición.';
@@ -56,6 +60,8 @@ const MINUTOS_CADUCIDAD = 15;
 
 const MSG_LLAMADO = 'Te estamos llamando. Por favor, acercate a la sala ahora. Si no te presentás en los próximos ' + MINUTOS_CADUCIDAD + ' minutos vas a perder tu lugar en la lista.';
 const MSG_CADUCADO = 'Pasaron ' + MINUTOS_CADUCIDAD + ' minutos desde que te llamamos y no te presentaste en la sala. Si todavía querés entrar, avisale a la recepción.';
+
+const MSG_RESERVA = 'Este canal es solo para la lista de espera de la sala. Para consultas sobre reservas, escribinos a contact@amaelounge.com.';
 
 // --- Punto de entrada: verificación del webhook (Meta la llama una sola vez al configurar) ---
 function doGet(e) {
@@ -119,6 +125,12 @@ function handleMessage(phone, text) {
       const faltantes = FIELDS.filter((f, i) => !data[rowIndex][i + 1]);
       sendWhatsApp(phone, 'Todavía no estás anotado. Me falta: ' + faltantes.map(f => FIELD_LABELS[f]).join(', ') + '.');
     }
+    return;
+  }
+
+  // Consulta de reserva (no lista de espera): redirigir, sin crear/tocar fila.
+  if (esIntencionReserva(text)) {
+    sendWhatsApp(phone, MSG_RESERVA);
     return;
   }
 
@@ -192,10 +204,7 @@ function parseWithGemini(text, camposFaltantes) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) return null; // Gemini no configurado todavía -> respaldo directo
 
-  // Verificá el nombre de modelo vigente en aistudio.google.com -- cambia seguido.
-  // Usar el modelo "Flash-Lite" del momento: es el que tiene mayor RPM gratuito.
-  const model = 'gemini-flash-lite-latest';
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + apiKey;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
 
   const prompt = 'Del siguiente mensaje de un pasajero de aeropuerto, extraé SOLO estos campos si están ' +
     'presentes: ' + camposFaltantes.join(', ') + '. Respondé ÚNICAMENTE un JSON con esas claves exactas, ' +
@@ -224,6 +233,53 @@ function parseWithGemini(text, camposFaltantes) {
     return JSON.parse(textoRespuesta);
   } catch (err) {
     console.error('Error llamando a Gemini: ' + err);
+    return null;
+  }
+}
+
+// Detecta si el mensaje es una consulta de reserva (no de lista de espera).
+// Con GEMINI_API_KEY configurada, le pide la clasificación a Gemini; si no
+// hay key o Gemini falla, cae a un chequeo determinístico por palabra clave.
+function esIntencionReserva(text) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (apiKey) {
+    const resultado = clasificarReservaConGemini(text, apiKey);
+    if (resultado !== null) return resultado;
+  }
+  return text.toLowerCase().includes('reserva');
+}
+
+function clasificarReservaConGemini(text, apiKey) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
+
+  const prompt = 'Un pasajero de aeropuerto le escribió este mensaje a un bot de lista de espera de una sala. ' +
+    'Respondé ÚNICAMENTE un JSON {"es_reserva": true o false} indicando si el mensaje es una consulta sobre ' +
+    'hacer una RESERVA (algo distinto de anotarse en la lista de espera). Ante la duda, false.\n\n' +
+    'Mensaje: "' + text + '"';
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json' }
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() !== 200) {
+      console.error('Gemini (clasificación reserva) devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+      return null;
+    }
+
+    const data = JSON.parse(response.getContentText());
+    const textoRespuesta = data.candidates[0].content.parts[0].text;
+    return JSON.parse(textoRespuesta).es_reserva === true;
+  } catch (err) {
+    console.error('Error llamando a Gemini (clasificación reserva): ' + err);
     return null;
   }
 }
