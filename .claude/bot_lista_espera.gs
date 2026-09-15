@@ -128,14 +128,12 @@ function handleMessage(phone, text) {
     return;
   }
 
-  // Consulta de reserva (no lista de espera): redirigir, sin crear/tocar fila.
-  if (esIntencionReserva(text)) {
-    sendWhatsApp(phone, MSG_RESERVA);
-    return;
-  }
-
   // Primer contacto: crear la fila y mandar las instrucciones
   if (rowIndex === -1) {
+    if (esIntencionReserva(text)) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
     const newRow = new Array(headers.length).fill('');
     newRow[0] = phone;
     sheet.appendRow(newRow);
@@ -146,17 +144,35 @@ function handleMessage(phone, text) {
   const row = data[rowIndex];
 
   if (row[estadoCol] === 'activo') {
+    if (esIntencionReserva(text)) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
     sendWhatsApp(phone, MSG_YA_ANOTADO);
     return;
   }
 
   const faltantes = FIELDS.filter((f, i) => !row[i + 1]);
 
-  // Intento 1: Gemini entiende el mensaje sin exigir formato ni orden.
+  // Intento 1: una sola llamada a Gemini clasifica si es reserva Y extrae
+  // los campos faltantes juntos (antes eran 2 llamadas separadas -- se
+  // unificaron acá mismo para no duplicar la latencia/cuota por mensaje).
   // Intento 2 (respaldo): si Gemini falla -- cuota agotada, error de red,
-  // JSON inválido -- se cae al parseo posicional por comas. Así una ráfaga
-  // que pise el RPM gratuito de Gemini no deja a nadie sin respuesta.
-  let asignaciones = parseWithGemini(text, faltantes) || {};
+  // JSON inválido -- se cae a un chequeo de reserva por palabra clave y al
+  // parseo posicional por comas. Así una ráfaga que pise el RPM gratuito
+  // de Gemini no deja a nadie sin respuesta.
+  const analisis = analizarConGemini(text, faltantes);
+  let asignaciones = {};
+  if (analisis) {
+    if (analisis.es_reserva === true) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
+    asignaciones = analisis.campos || {};
+  } else if (text.toLowerCase().includes('reserva')) {
+    sendWhatsApp(phone, MSG_RESERVA);
+    return;
+  }
   Object.keys(asignaciones).forEach(k => { if (!asignaciones[k]) delete asignaciones[k]; });
 
   if (Object.keys(asignaciones).length === 0) {
@@ -197,18 +213,24 @@ function handleMessage(phone, text) {
   }
 }
 
-// Intenta extraer los campos faltantes del texto libre del pasajero usando Gemini.
-// Devuelve null (no undefined) ante cualquier falla, para que handleMessage
-// sepa que tiene que usar el respaldo por comas.
-function parseWithGemini(text, camposFaltantes) {
+// Una sola llamada a Gemini que clasifica si el mensaje es una consulta de
+// reserva Y (si no lo es) extrae los campos faltantes -- unificado para no
+// pagar 2 llamadas/2 round-trips por mensaje. Devuelve null ante cualquier
+// falla (sin API key, HTTP != 200, JSON inválido) para que handleMessage
+// use el respaldo por palabra clave + parseo por comas.
+function analizarConGemini(text, camposFaltantes) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) return null; // Gemini no configurado todavía -> respaldo directo
 
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
 
-  const prompt = 'Del siguiente mensaje de un pasajero de aeropuerto, extraé SOLO estos campos si están ' +
-    'presentes: ' + camposFaltantes.join(', ') + '. Respondé ÚNICAMENTE un JSON con esas claves exactas, ' +
-    'sin texto adicional. Si un campo no está en el mensaje, poné null.\n\nMensaje: "' + text + '"';
+  const prompt = 'Un pasajero de aeropuerto le escribió este mensaje a un bot de lista de espera de una sala. ' +
+    'Respondé ÚNICAMENTE un JSON con esta forma exacta: {"es_reserva": true o false, "campos": {' +
+    camposFaltantes.map(f => '"' + f + '": null').join(', ') + '}}.\n\n' +
+    '"es_reserva" es true si el mensaje es una consulta sobre hacer una RESERVA (algo distinto de anotarse ' +
+    'en la lista de espera) -- ante la duda, false. "campos" son estos datos del pasajero SOLO si están ' +
+    'presentes en el mensaje: ' + camposFaltantes.join(', ') + '. Si un campo no está en el mensaje, poné ' +
+    'null ahí. Si es_reserva es true, dejá todos los campos en null.\n\nMensaje: "' + text + '"';
 
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -224,7 +246,7 @@ function parseWithGemini(text, camposFaltantes) {
     });
 
     if (response.getResponseCode() !== 200) {
-      console.error('Gemini devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+      console.error('Gemini (análisis combinado) devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
       return null; // cuota agotada, error del modelo, etc. -> respaldo
     }
 
@@ -232,7 +254,7 @@ function parseWithGemini(text, camposFaltantes) {
     const textoRespuesta = data.candidates[0].content.parts[0].text;
     return JSON.parse(textoRespuesta);
   } catch (err) {
-    console.error('Error llamando a Gemini: ' + err);
+    console.error('Error llamando a Gemini (análisis combinado): ' + err);
     return null;
   }
 }
