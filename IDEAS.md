@@ -18,3 +18,8 @@ Notas sueltas para revisar y, si sirven, mover al Backlog de `.claude/CLAUDE.md`
   manda nada. Agrega complejidad (pasa de mandar directo a depender de un
   trigger de tiempo corto).
 
+- Total de pasajeros por vuelo. Conectar el bot a una API de vuelos (para
+  esto y para la otra idea de sugerir vuelo por parecido/horario) -- son la
+  misma dependencia nueva, conviene resolverlas juntas cuando se elija la
+  fuente de datos de vuelos.
+
