@@ -77,6 +77,7 @@ anotarlo a mano ni contestar "¿cuánto me falta?" uno por uno.
 | Un solo mensaje del pasajero con todos los datos, no pregunta-por-pregunta | Flujo paso a paso (una pregunta, una respuesta, repetir) | Menos idas y vueltas. El costo es que el parseo es más difícil (де ahí Gemini + respaldo).                                                                                                                                          |
 | Caducidad de 15 min no saca a la persona de la cola automáticamente        | Sacarla sola (cambiar estado, liberar el lugar)          | Solo se le manda el aviso de que pasó el tiempo. Si no se presentó de verdad, el staff la saca a mano — evita sacar a alguien que sí está pero tardó en volver a la fila física.                                                     |
 | Interruptor de lista habilitada falla "abierto" (sin `Config` → `true`)    | Fallar "cerrado" (sin `Config` → bloqueado)               | Si a alguien se le olvida correr `setupConfigSheet`, el bot sigue funcionando como si no existiera el interruptor, en vez de dejar a todo el mundo sin poder anotarse por un paso de setup faltante.                                |
+| Checkbox de `llamado` se pone fila por fila al crearla, no en bloque      | Precargar checkbox en las primeras 500 filas de una       | **Bug real encontrado en testing:** precargar checkbox en 500 filas vacías hacía que Sheets las contara como "con contenido", así que `getLastRow()` se corría 500 filas de más y `appendRow()` (usado para anotar gente nueva) empezaba a tirar los registros nuevos 500 filas más abajo de donde debían quedar. |
 
 ## Estado actual del código
 
@@ -121,7 +122,9 @@ Archivo: `bot_lista_espera.gs` (Google Apps Script)
   cola — caducar el aviso no la saca de la lista, eso lo hace el staff a
   mano si no se presentó.
 - `setupColumnasLlamado()` — se corre una sola vez a mano desde el editor.
-  Agrega las columnas de llamado si faltan y pone checkbox en `llamado`.
+  Agrega las columnas de llamado si faltan y pone checkbox en `llamado`
+  solo para las filas que YA tienen datos (no precarga filas vacías de
+  más). Cada fila nueva recibe su checkbox al crearse, en `handleMessage`.
 - `isListaHabilitada()` / `setupConfigSheet()` — interruptor global para
   cortar anotaciones a distancia (ej. fuera de horario, o cuando el staff
   quiere que solo se anote presencialmente). Lee el checkbox

@@ -153,6 +153,15 @@ function handleMessage(phone, text) {
     const newRow = new Array(headers.length).fill('');
     newRow[0] = phone;
     sheet.appendRow(newRow);
+
+    // Checkbox puntual en la fila recién creada (no se precarga en bloque:
+    // eso hacía que Sheets contara filas vacías como "con contenido" y
+    // rompía dónde caía el próximo appendRow -- ver setupColumnasLlamado).
+    const llamadoCol = headers.indexOf(COL_LLAMADO) + 1;
+    if (llamadoCol > 0) {
+      sheet.getRange(sheet.getLastRow(), llamadoCol).insertCheckboxes();
+    }
+
     sendWhatsApp(phone, MSG_INSTRUCCIONES);
     return;
   }
@@ -403,8 +412,10 @@ function logToSheet(to, code, body) {
 
 // Ejecutar una sola vez a mano desde el editor. Agrega las columnas de
 // llamado al final de la hoja si todavía no existen, y les pone checkbox
-// a las primeras 500 filas de la columna "llamado" para que sea tildable
-// con el mouse.
+// a las filas que YA tienen datos (no precarga filas vacías de más: eso
+// hacía que Sheets las contara como "con contenido" y rompía dónde caía
+// el próximo appendRow -- ver el comentario en handleMessage). Las filas
+// nuevas reciben su checkbox al crearse, una por una.
 function setupColumnasLlamado() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
@@ -416,7 +427,10 @@ function setupColumnasLlamado() {
 
   const headersActualizados = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const llamadoCol = headersActualizados.indexOf(COL_LLAMADO) + 1;
-  sheet.getRange(2, llamadoCol, 500, 1).insertCheckboxes();
+  const ultimaFila = sheet.getLastRow();
+  if (ultimaFila >= 2) {
+    sheet.getRange(2, llamadoCol, ultimaFila - 1, 1).insertCheckboxes();
+  }
 }
 
 // Ejecutar una sola vez a mano desde el editor. Crea la hoja "Config" con
