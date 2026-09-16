@@ -410,6 +410,16 @@ function logToSheet(to, code, body) {
   logSheet.appendRow([new Date(), to, code, body]);
 }
 
+// Debug temporal: corré esta función a mano desde el editor y mirá el
+// "Registro de ejecución". Devuelve la URL exacta del spreadsheet al que
+// está atado este proyecto de Apps Script -- compararla con la URL que
+// tenés abierta en el navegador cuando editás la hoja a mano confirma si
+// son el mismo archivo o si estás editando una copia/clon distinta.
+// Sacar esto una vez confirmado.
+function chequearHojaAtada() {
+  Logger.log(SpreadsheetApp.getActive().getUrl());
+}
+
 // Ejecutar una sola vez a mano desde el editor. Agrega las columnas de
 // llamado al final de la hoja si todavía no existen, y les pone checkbox
 // a las filas que YA tienen datos (no precarga filas vacías de más: eso
