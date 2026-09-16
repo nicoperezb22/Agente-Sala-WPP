@@ -18,6 +18,14 @@
  *    WHATSAPP_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN
  * 3. Implementar como Web App (Ejecutar como: Yo / Acceso: Cualquier usuario)
  * 4. Pegar la URL de la Web App como webhook en Meta for Developers > WhatsApp > Configuration
+ * 5. Ejecutar una vez `setupColumnasLlamado` y `setupConfigSheet` desde el
+ *    editor (agrega las columnas de "llamado" y la hoja "Config" con el
+ *    interruptor de lista habilitada/deshabilitada, si todavía no existen).
+ * 6. En Activadores (ícono de reloj), agregar DOS triggers instalables:
+ *    - onCheckboxEdit: evento "Al editar" (From spreadsheet > On edit).
+ *    - checkTiemposCaducados: evento de tiempo, cada 5 o 10 minutos.
+ *    Tienen que ser instalables (no simples) para que funcionen aunque
+ *    tilde la casilla alguien del staff que no autorizó el proyecto.
  */
 
 const SHEET_NAME = 'Lista de espera';
@@ -33,9 +41,34 @@ const FIELD_LABELS = {
   motivo: 'motivo de la espera'
 };
 
+// Formato IATA típico: código de aerolínea (2-3 letras/números) + número de vuelo (1-4 dígitos,
+// opcionalmente con una letra de sufijo). Ej.: AA1234, LA800, IB6844A. No valida que el vuelo exista.
+const VUELO_REGEX = /^[A-Za-z0-9]{2,3}[\s-]?\d{1,4}[A-Za-z]?$/;
+
+// Verificá el nombre de modelo vigente en aistudio.google.com -- cambia seguido.
+// Usar el modelo "Flash-Lite" del momento: es el que tiene mayor RPM gratuito.
+const GEMINI_MODEL = 'gemini-flash-lite-latest';
+
 const MSG_INSTRUCCIONES = 'Hola, bienvenido a la lista de espera. Respondé en un solo mensaje con estos datos separados por coma, en este orden: nombre completo, número de vuelo, cantidad de personas, motivo.\n\nEjemplo: Juan Pérez, AA1234, 3, sala llena';
 const MSG_YA_ANOTADO = 'Ya estás anotado. Escribí "estado" cuando quieras saber cuánto te falta.';
 const MSG_CONFIRMACION = 'Listo, quedaste anotado en la lista de espera. Escribí "estado" en cualquier momento para saber tu posición.';
+
+// --- Llamado y caducidad de turno ---
+const COL_LLAMADO = 'llamado';
+const COL_HORA_LLAMADO = 'hora_llamado';
+const COL_AVISO_CADUCADO = 'aviso_caducado_enviado';
+const MINUTOS_CADUCIDAD = 15;
+
+const MSG_LLAMADO = 'Te estamos llamando. Por favor, acercate a la sala ahora. Si no te presentás en los próximos ' + MINUTOS_CADUCIDAD + ' minutos vas a perder tu lugar en la lista.';
+const MSG_CADUCADO = 'Pasaron ' + MINUTOS_CADUCIDAD + ' minutos desde que te llamamos y no te presentaste en la sala. Si todavía querés entrar, avisale a la recepción.';
+
+const MSG_RESERVA = 'Este canal es solo para la lista de espera de la sala. Para consultas sobre reservas, escribinos a contact@amaelounge.com.';
+
+// --- Interruptor de lista habilitada/deshabilitada ---
+const CONFIG_SHEET_NAME = 'Config';
+const COL_LISTA_HABILITADA = 'lista_habilitada';
+
+const MSG_LISTA_DESHABILITADA = 'Por el momento no estamos tomando anotaciones a distancia. La lista de espera se maneja de forma presencial en la sala.';
 
 // --- Punto de entrada: verificación del webhook (Meta la llama una sola vez al configurar) ---
 function doGet(e) {
@@ -89,18 +122,46 @@ function handleMessage(phone, text) {
     if (String(data[i][0]) === String(phone)) { rowIndex = i; break; }
   }
 
-  // Comando "estado": disponible en cualquier momento si ya está anotado
-  if (text.toLowerCase() === 'estado' && rowIndex > -1 && data[rowIndex][estadoCol] === 'activo') {
-    const posicion = calcularPosicion(sheet, phone);
-    sendWhatsApp(phone, 'Estás en la posición ' + posicion + ' de la lista. Te avisamos apenas te toque.');
+  // Comando "estado": nunca se trata como dato, aunque el pasajero todavía
+  // no haya completado su registro (si no, "estado" se guardaría como nombre).
+  if (text.toLowerCase() === 'estado' && rowIndex > -1) {
+    if (data[rowIndex][estadoCol] === 'activo') {
+      const posicion = calcularPosicion(sheet, phone);
+      sendWhatsApp(phone, 'Estás en la posición ' + posicion + ' de la lista. Te avisamos apenas te toque.');
+    } else {
+      const faltantes = FIELDS.filter((f, i) => !data[rowIndex][i + 1]);
+      sendWhatsApp(phone, 'Todavía no estás anotado. Me falta: ' + faltantes.map(f => FIELD_LABELS[f]).join(', ') + '.');
+    }
+    return;
+  }
+
+  // Lista deshabilitada: bloquea anotarse (nuevo o completando datos), pero
+  // no afecta a quien ya está activo -- sigue pudiendo usar "estado" y
+  // recibir avisos de llamado/caducidad con normalidad.
+  const yaActivo = rowIndex > -1 && data[rowIndex][estadoCol] === 'activo';
+  if (!isListaHabilitada() && !yaActivo) {
+    sendWhatsApp(phone, MSG_LISTA_DESHABILITADA);
     return;
   }
 
   // Primer contacto: crear la fila y mandar las instrucciones
   if (rowIndex === -1) {
+    if (esIntencionReserva(text)) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
     const newRow = new Array(headers.length).fill('');
     newRow[0] = phone;
     sheet.appendRow(newRow);
+
+    // Checkbox puntual en la fila recién creada (no se precarga en bloque:
+    // eso hacía que Sheets contara filas vacías como "con contenido" y
+    // rompía dónde caía el próximo appendRow -- ver setupColumnasLlamado).
+    const llamadoCol = headers.indexOf(COL_LLAMADO) + 1;
+    if (llamadoCol > 0) {
+      sheet.getRange(sheet.getLastRow(), llamadoCol).insertCheckboxes();
+    }
+
     sendWhatsApp(phone, MSG_INSTRUCCIONES);
     return;
   }
@@ -108,17 +169,35 @@ function handleMessage(phone, text) {
   const row = data[rowIndex];
 
   if (row[estadoCol] === 'activo') {
+    if (esIntencionReserva(text)) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
     sendWhatsApp(phone, MSG_YA_ANOTADO);
     return;
   }
 
   const faltantes = FIELDS.filter((f, i) => !row[i + 1]);
 
-  // Intento 1: Gemini entiende el mensaje sin exigir formato ni orden.
+  // Intento 1: una sola llamada a Gemini clasifica si es reserva Y extrae
+  // los campos faltantes juntos (antes eran 2 llamadas separadas -- se
+  // unificaron acá mismo para no duplicar la latencia/cuota por mensaje).
   // Intento 2 (respaldo): si Gemini falla -- cuota agotada, error de red,
-  // JSON inválido -- se cae al parseo posicional por comas. Así una ráfaga
-  // que pise el RPM gratuito de Gemini no deja a nadie sin respuesta.
-  let asignaciones = parseWithGemini(text, faltantes) || {};
+  // JSON inválido -- se cae a un chequeo de reserva por palabra clave y al
+  // parseo posicional por comas. Así una ráfaga que pise el RPM gratuito
+  // de Gemini no deja a nadie sin respuesta.
+  const analisis = analizarConGemini(text, faltantes);
+  let asignaciones = {};
+  if (analisis) {
+    if (analisis.es_reserva === true) {
+      sendWhatsApp(phone, MSG_RESERVA);
+      return;
+    }
+    asignaciones = analisis.campos || {};
+  } else if (text.toLowerCase().includes('reserva')) {
+    sendWhatsApp(phone, MSG_RESERVA);
+    return;
+  }
   Object.keys(asignaciones).forEach(k => { if (!asignaciones[k]) delete asignaciones[k]; });
 
   if (Object.keys(asignaciones).length === 0) {
@@ -135,6 +214,11 @@ function handleMessage(phone, text) {
   // Validación liviana: cantidad_personas tiene que ser un número
   if (asignaciones.cantidad_personas && isNaN(parseInt(asignaciones.cantidad_personas, 10))) {
     delete asignaciones.cantidad_personas;
+  }
+
+  // Validación liviana: vuelo tiene que tener forma de código IATA (no valida que exista)
+  if (asignaciones.vuelo && !VUELO_REGEX.test(asignaciones.vuelo.trim())) {
+    delete asignaciones.vuelo;
   }
 
   Object.keys(asignaciones).forEach(campo => {
@@ -154,21 +238,24 @@ function handleMessage(phone, text) {
   }
 }
 
-// Intenta extraer los campos faltantes del texto libre del pasajero usando Gemini.
-// Devuelve null (no undefined) ante cualquier falla, para que handleMessage
-// sepa que tiene que usar el respaldo por comas.
-function parseWithGemini(text, camposFaltantes) {
+// Una sola llamada a Gemini que clasifica si el mensaje es una consulta de
+// reserva Y (si no lo es) extrae los campos faltantes -- unificado para no
+// pagar 2 llamadas/2 round-trips por mensaje. Devuelve null ante cualquier
+// falla (sin API key, HTTP != 200, JSON inválido) para que handleMessage
+// use el respaldo por palabra clave + parseo por comas.
+function analizarConGemini(text, camposFaltantes) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) return null; // Gemini no configurado todavía -> respaldo directo
 
-  // Verificá el nombre de modelo vigente en aistudio.google.com -- cambia seguido.
-  // Usar el modelo "Flash-Lite" del momento: es el que tiene mayor RPM gratuito.
-  const model = 'gemini-flash-lite-latest';
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + apiKey;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
 
-  const prompt = 'Del siguiente mensaje de un pasajero de aeropuerto, extraé SOLO estos campos si están ' +
-    'presentes: ' + camposFaltantes.join(', ') + '. Respondé ÚNICAMENTE un JSON con esas claves exactas, ' +
-    'sin texto adicional. Si un campo no está en el mensaje, poné null.\n\nMensaje: "' + text + '"';
+  const prompt = 'Un pasajero de aeropuerto le escribió este mensaje a un bot de lista de espera de una sala. ' +
+    'Respondé ÚNICAMENTE un JSON con esta forma exacta: {"es_reserva": true o false, "campos": {' +
+    camposFaltantes.map(f => '"' + f + '": null').join(', ') + '}}.\n\n' +
+    '"es_reserva" es true si el mensaje es una consulta sobre hacer una RESERVA (algo distinto de anotarse ' +
+    'en la lista de espera) -- ante la duda, false. "campos" son estos datos del pasajero SOLO si están ' +
+    'presentes en el mensaje: ' + camposFaltantes.join(', ') + '. Si un campo no está en el mensaje, poné ' +
+    'null ahí. Si es_reserva es true, dejá todos los campos en null.\n\nMensaje: "' + text + '"';
 
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -184,7 +271,7 @@ function parseWithGemini(text, camposFaltantes) {
     });
 
     if (response.getResponseCode() !== 200) {
-      console.error('Gemini devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+      console.error('Gemini (análisis combinado) devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
       return null; // cuota agotada, error del modelo, etc. -> respaldo
     }
 
@@ -192,7 +279,54 @@ function parseWithGemini(text, camposFaltantes) {
     const textoRespuesta = data.candidates[0].content.parts[0].text;
     return JSON.parse(textoRespuesta);
   } catch (err) {
-    console.error('Error llamando a Gemini: ' + err);
+    console.error('Error llamando a Gemini (análisis combinado): ' + err);
+    return null;
+  }
+}
+
+// Detecta si el mensaje es una consulta de reserva (no de lista de espera).
+// Con GEMINI_API_KEY configurada, le pide la clasificación a Gemini; si no
+// hay key o Gemini falla, cae a un chequeo determinístico por palabra clave.
+function esIntencionReserva(text) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (apiKey) {
+    const resultado = clasificarReservaConGemini(text, apiKey);
+    if (resultado !== null) return resultado;
+  }
+  return text.toLowerCase().includes('reserva');
+}
+
+function clasificarReservaConGemini(text, apiKey) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
+
+  const prompt = 'Un pasajero de aeropuerto le escribió este mensaje a un bot de lista de espera de una sala. ' +
+    'Respondé ÚNICAMENTE un JSON {"es_reserva": true o false} indicando si el mensaje es una consulta sobre ' +
+    'hacer una RESERVA (algo distinto de anotarse en la lista de espera). Ante la duda, false.\n\n' +
+    'Mensaje: "' + text + '"';
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json' }
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() !== 200) {
+      console.error('Gemini (clasificación reserva) devolvió ' + response.getResponseCode() + ': ' + response.getContentText());
+      return null;
+    }
+
+    const data = JSON.parse(response.getContentText());
+    const textoRespuesta = data.candidates[0].content.parts[0].text;
+    return JSON.parse(textoRespuesta).es_reserva === true;
+  } catch (err) {
+    console.error('Error llamando a Gemini (clasificación reserva): ' + err);
     return null;
   }
 }
@@ -212,6 +346,27 @@ function calcularPosicion(sheet, phone) {
   return idx === -1 ? '—' : idx + 1;
 }
 
+// El webhook entrega los números argentinos como 549 + área + número (ej.
+// 5491123871261), pero la Cloud API para ENVIAR a ese mismo número exige
+// sacar el 9 y meter un 15 después del código de área (ej. 54111523871261).
+// Confirmado a mano contra el probador de Meta para un número de área 11
+// (Buenos Aires/GBA). Asume código de área de 2 dígitos -- es el caso de
+// "11", que va a ser la mayoría de los pasajeros de una sala en Ezeiza,
+// pero es incorrecto para números de otras provincias con área de 3 o 4
+// dígitos (ahí habría que separar por una tabla real de códigos de área,
+// que no está armada). Solo afecta el envío -- lo que se guarda en el
+// Sheet es siempre el número tal cual lo entrega el webhook.
+function fixArgentinaNumber(phone) {
+  const digits = String(phone);
+  if (digits.length === 13 && digits.startsWith('549')) {
+    const nacional = digits.slice(3); // 10 dígitos: área + número local
+    const area = nacional.slice(0, 2);
+    const local = nacional.slice(2);
+    return '54' + area + '15' + local;
+  }
+  return digits;
+}
+
 function sendWhatsApp(to, bodyText) {
   const props = PropertiesService.getScriptProperties();
   const token = props.getProperty('WHATSAPP_TOKEN');
@@ -220,16 +375,145 @@ function sendWhatsApp(to, bodyText) {
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: to,
+    to: fixArgentinaNumber(to),
     type: 'text',
     text: { body: bodyText }
   };
 
-  UrlFetchApp.fetch(url, {
+  const response = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + token },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
+
+  // muteHttpExceptions evita que un 4xx/5xx tire excepción (y por lo tanto
+  // evita que se vea como error en el log de ejecuciones), así que hay que
+  // loguear la respuesta a mano para poder diagnosticar envíos fallidos.
+  const code = response.getResponseCode();
+  console.error('sendWhatsApp a ' + to + ' devolvió ' + code + ': ' + response.getContentText());
+  logToSheet(to, code, response.getContentText());
+}
+
+// Debug temporal: además de console.error, deja un registro en una hoja
+// "Logs" del mismo spreadsheet. Sirve para diagnosticar sin depender del
+// panel de Ejecuciones de Apps Script (que a veces no abre en el navegador).
+// Sacar esto una vez que el envío esté confirmado funcionando en producción.
+function logToSheet(to, code, body) {
+  const ss = SpreadsheetApp.getActive();
+  let logSheet = ss.getSheetByName('Logs');
+  if (!logSheet) {
+    logSheet = ss.insertSheet('Logs');
+    logSheet.appendRow(['timestamp', 'telefono', 'codigo', 'respuesta']);
+  }
+  logSheet.appendRow([new Date(), to, code, body]);
+}
+
+// Ejecutar una sola vez a mano desde el editor. Agrega las columnas de
+// llamado al final de la hoja si todavía no existen, y les pone checkbox
+// a las filas que YA tienen datos (no precarga filas vacías de más: eso
+// hacía que Sheets las contara como "con contenido" y rompía dónde caía
+// el próximo appendRow -- ver el comentario en handleMessage). Las filas
+// nuevas reciben su checkbox al crearse, una por una.
+function setupColumnasLlamado() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const nuevasCols = [COL_LLAMADO, COL_HORA_LLAMADO, COL_AVISO_CADUCADO].filter(c => headers.indexOf(c) === -1);
+
+  if (nuevasCols.length > 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1, 1, nuevasCols.length).setValues([nuevasCols]);
+  }
+
+  const headersActualizados = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const llamadoCol = headersActualizados.indexOf(COL_LLAMADO) + 1;
+  const ultimaFila = sheet.getLastRow();
+  if (ultimaFila >= 2) {
+    sheet.getRange(2, llamadoCol, ultimaFila - 1, 1).insertCheckboxes();
+  }
+}
+
+// Ejecutar una sola vez a mano desde el editor. Crea la hoja "Config" con
+// el interruptor de lista habilitada/deshabilitada si todavía no existe,
+// tildado (habilitada) por defecto.
+function setupConfigSheet() {
+  const ss = SpreadsheetApp.getActive();
+  let configSheet = ss.getSheetByName(CONFIG_SHEET_NAME);
+  if (!configSheet) {
+    configSheet = ss.insertSheet(CONFIG_SHEET_NAME);
+    configSheet.getRange(1, 1).setValue(COL_LISTA_HABILITADA);
+    configSheet.getRange(2, 1).insertCheckboxes();
+    configSheet.getRange(2, 1).setValue(true);
+  }
+}
+
+// Lee el interruptor de la hoja "Config". Si la hoja o la celda todavía no
+// existen (setupConfigSheet no se corrió) devuelve true -- falla "abierto"
+// para no bloquear la lista por un paso de setup que falta.
+function isListaHabilitada() {
+  const configSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG_SHEET_NAME);
+  if (!configSheet) return true;
+
+  const headers = configSheet.getRange(1, 1, 1, configSheet.getLastColumn()).getValues()[0];
+  const col = headers.indexOf(COL_LISTA_HABILITADA) + 1;
+  if (col === 0) return true;
+
+  return configSheet.getRange(2, col).getValue() !== false;
+}
+
+// Trigger instalable de tipo "Al editar" (From spreadsheet > On edit),
+// apuntando a esta función -- tiene que ser instalable, no simple, para
+// que corra con los permisos del dueño del script aunque tilde la casilla
+// alguien del staff que no autorizó el proyecto.
+//
+// Al tildar la casilla de "llamado" de una fila: guarda la hora y manda el
+// mensaje de llamado. Destildarla no hace nada (evita reenvíos accidentales).
+function onCheckboxEdit(e) {
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME || e.range.getRow() === 1) return;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const llamadoCol = headers.indexOf(COL_LLAMADO) + 1;
+  if (llamadoCol === 0 || e.range.getColumn() !== llamadoCol || e.value !== 'TRUE') return;
+
+  const row = e.range.getRow();
+  const telefonoCol = headers.indexOf('telefono') + 1;
+  const horaLlamadoCol = headers.indexOf(COL_HORA_LLAMADO) + 1;
+  const avisoCol = headers.indexOf(COL_AVISO_CADUCADO) + 1;
+
+  sheet.getRange(row, horaLlamadoCol).setValue(new Date());
+  sheet.getRange(row, avisoCol).setValue(false);
+
+  const phone = sheet.getRange(row, telefonoCol).getValue();
+  sendWhatsApp(phone, MSG_LLAMADO);
+}
+
+// Trigger instalable de tiempo (cada 5 o 10 minutos), apuntando a esta
+// función. Revisa a quién se llamó hace más de MINUTOS_CADUCIDAD y todavía
+// no recibió el aviso de caducidad, y se lo manda. La persona sigue
+// contando como activa en la cola -- si no se presentó, el staff la saca
+// a mano.
+function checkTiemposCaducados() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const telefonoCol = headers.indexOf('telefono');
+  const llamadoCol = headers.indexOf(COL_LLAMADO);
+  const horaLlamadoCol = headers.indexOf(COL_HORA_LLAMADO);
+  const avisoCol = headers.indexOf(COL_AVISO_CADUCADO);
+  if (llamadoCol === -1 || horaLlamadoCol === -1 || avisoCol === -1) return;
+
+  const ahora = new Date();
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[llamadoCol] !== true || row[avisoCol] === true || !row[horaLlamadoCol]) continue;
+
+    const minutosPasados = (ahora - new Date(row[horaLlamadoCol])) / 60000;
+    if (minutosPasados >= MINUTOS_CADUCIDAD) {
+      sendWhatsApp(row[telefonoCol], MSG_CADUCADO);
+      sheet.getRange(i + 1, avisoCol + 1).setValue(true);
+    }
+  }
 }
