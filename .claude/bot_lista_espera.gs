@@ -420,6 +420,42 @@ function chequearHojaAtada() {
   Logger.log(SpreadsheetApp.getActive().getUrl());
 }
 
+// Debug temporal: corré esta función a mano desde el editor y mirá el
+// "Registro de ejecución". Devuelve getLastRow() y getLastColumn() reales
+// de la hoja -- sirve para confirmar si quedan filas "fantasma" (con
+// checkbox u otro contenido) más abajo de los datos reales, sin depender
+// de mirar la hoja a ojo (borrar desde la interfaz de Sheets no siempre
+// saca la fila de "usada" si queda cualquier validación/formato pegado).
+function chequearUltimaFila() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  Logger.log('Última fila: ' + sheet.getLastRow() + ' / Última columna: ' + sheet.getLastColumn());
+}
+
+// Debug temporal: corré esta función a mano desde el editor. Busca la
+// última fila que tiene un teléfono real en la columna A y elimina TODAS
+// las filas después de esa -- soluciona de raíz las filas "fantasma" que
+// quedan de precargas viejas de checkbox, sin depender de borrar a mano
+// desde la interfaz de Sheets (que repetidamente no sacaba el contenido
+// fantasma). Sacar esto una vez confirmado que no vuelve a pasar.
+function limpiarFilasFantasma() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const ultimaFilaActual = sheet.getLastRow();
+  const telefonos = sheet.getRange(1, 1, ultimaFilaActual, 1).getValues();
+
+  let ultimaFilaConDatos = 1; // fila 1 = encabezados
+  for (let i = 1; i < telefonos.length; i++) {
+    if (telefonos[i][0] !== '' && telefonos[i][0] !== null) {
+      ultimaFilaConDatos = i + 1;
+    }
+  }
+
+  if (ultimaFilaActual > ultimaFilaConDatos) {
+    sheet.deleteRows(ultimaFilaConDatos + 1, ultimaFilaActual - ultimaFilaConDatos);
+  }
+
+  Logger.log('Filas fantasma eliminadas. Última fila con datos reales: ' + ultimaFilaConDatos + '. Nueva última fila: ' + sheet.getLastRow());
+}
+
 // Ejecutar una sola vez a mano desde el editor. Agrega las columnas de
 // llamado al final de la hoja si todavía no existen, y les pone checkbox
 // a las filas que YA tienen datos (no precarga filas vacías de más: eso
