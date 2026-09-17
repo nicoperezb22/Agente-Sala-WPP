@@ -23,3 +23,13 @@ Notas sueltas para revisar y, si sirven, mover al Backlog de `.claude/CLAUDE.md`
   misma dependencia nueva, conviene resolverlas juntas cuando se elija la
   fuente de datos de vuelos.
 
+- Mandar un mensaje para "activar" el bot. Sin especificar todavía qué
+  significa exactamente -- ¿un comando admin que resetea/limpia algo? ¿algo
+  para "despertar" el script y evitar el arranque en frío de la primera
+  ejecución? Aclarar el caso de uso antes de diseñarlo.
+
+- Formas de hacer más rápido el bot en general (más allá de lo ya hecho:
+  unificar las 2 llamadas a Gemini en 1). Pensar: latencia de arranque en
+  frío de Apps Script, cuántas veces se lee/escribe el Sheet por mensaje,
+  si se puede cachear algo entre ejecuciones.
+
