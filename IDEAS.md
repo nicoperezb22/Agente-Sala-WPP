@@ -33,3 +33,10 @@ Notas sueltas para revisar y, si sirven, mover al Backlog de `.claude/CLAUDE.md`
   frío de Apps Script, cuántas veces se lee/escribe el Sheet por mensaje,
   si se puede cachear algo entre ejecuciones.
 
+- Otra casilla de verificación, "ingreso" (ya existe esa columna en el Sheet,
+  hoy sin usar por el código). Cuando se tilda "ingreso" para una fila:
+  dejar de mandarle cualquier otro mensaje automático (llamado, caducidad),
+  y en vez de eso mandarle un mensaje de agradecimiento con el QR para
+  dejar su opinión sobre la sala. Funciona como un "cierre" del flujo de
+  esa persona, parecido a cómo "llamado" dispara su propio mensaje.
+
